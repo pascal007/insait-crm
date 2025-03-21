@@ -18,7 +18,7 @@ class HubSpotCRMService(CRMStrategyInterface):
     CONTACT_CREATE_URL = f"{HUBSPOT_BASE_URL}/crm/v3/objects/contacts"
     DEAL_PIPELINE_URL = HUBSPOT_BASE_URL + '/crm/v3/pipelines/deals'
     DEAL_CREATE_URL = HUBSPOT_BASE_URL + '/crm/v3/objects/deals'
-    DEAL_RETRIEVE_URL = HUBSPOT_TOKEN_URL + '/crm/v3/associations/contacts/deals/{}'
+    DEAL_RETRIEVE_URL = HUBSPOT_BASE_URL + '/crm/v3/associations/contacts/deals/{}'
     DEAL_LIST_URL = HUBSPOT_BASE_URL + '/crm/v3/objects/deals'
     TICKET_LIST_URL = HUBSPOT_BASE_URL + '/crm/v3/objects/tickets'
 
