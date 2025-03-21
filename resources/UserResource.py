@@ -13,6 +13,12 @@ hubspot = HubSpotCRMService()
 class RegisterResource(Resource):
     @staticmethod
     def post():
+        """Return a hello world message
+        ---
+        responses:
+          200:
+
+        """
         try:
             if not request.data:
                 return {'success': False, 'error': 'Payload data incomplete'}, 400
@@ -34,16 +40,3 @@ class RegisterResource(Resource):
             return {'success': False, 'error': str(e)}, 500
 
 
-class ListCRMObjects(Resource):
-
-    @staticmethod
-    def get():
-        created_after = request.args.get("created_after")
-        limit = request.args.get("limit", 50, type=int)
-        offset = request.args.get("offset", 0, type=int)
-
-        contacts = hubspot.get_new_contacts(created_after, limit, offset)
-        deals = hubspot.get_new_deals(created_after, limit, offset)
-        tickets = hubspot.get_new_tickets(created_after, limit, offset)
-
-        return {"contacts": contacts, "deals": deals, "tickets": tickets}

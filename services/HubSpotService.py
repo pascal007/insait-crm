@@ -37,7 +37,7 @@ class HubSpotCRMService(CRMStrategyInterface):
             "client_secret": os.environ.get('HUBSPOT_CLIENT_SECRET'),
             "refresh_token": os.environ.get('HUBSPOT_REFRESH_TOKEN')
         }
-        response = requests.post(self.HUBSPOT_TOKEN_URL, data=data)
+        response = self._make_request(self.HUBSPOT_TOKEN_URL, "POST", data=data)
         if response.status_code == 200:
             logger.info("Existing access token invalid, obtaining new access token")
             response_data = response.json()
@@ -51,7 +51,7 @@ class HubSpotCRMService(CRMStrategyInterface):
         return {"Authorization": f"Bearer {self._get_access_token()}", "Content-Type": "application/json"}
 
     def _retrieve_existing_contact_data(self, email):
-        response = requests.get(self.CONTACT_VERIFY_URL.format(email), headers=self._get_headers())
+        response = self._make_request(self.CONTACT_VERIFY_URL.format(email), "GET", headers=self._get_headers())
         if response.status_code == 200:
             logger.info(f"Exiting user with {email} exists for update")
             return True, response.json()
@@ -61,7 +61,7 @@ class HubSpotCRMService(CRMStrategyInterface):
         raise CRMError('Invalid response from provider')
 
     def _validate_and_clean_deal_data(self, deal_data):
-        deal_results = requests.get(self.DEAL_PIPELINE_URL, headers=self._get_headers()).json()['results']
+        deal_results = self._make_request(self.DEAL_PIPELINE_URL, "GET", headers=self._get_headers()).json()['results']
         if not deal_results:
             logger.error("deal pipeline stages not configured ")
             raise CRMError("Deal pipeline stages not configured")
@@ -77,6 +77,24 @@ class HubSpotCRMService(CRMStrategyInterface):
             deal['dealstage'] = deal_pipeline_stages_data.get(deal['dealstage'])
         return deal_data, deal_pipeline_id
 
+    def _make_request(self, url, method, max_retries=5, backoff_factor=1, **kwargs):
+        retries = 0
+        backoff = backoff_factor
+
+        while retries < max_retries:
+            logger.info(f"making api call to {url} using {method} method")
+            response = requests.request(method, url, **kwargs)
+
+            if response.status_code == 429:
+                print(f"Rate limited. Retrying in {backoff} seconds...")
+                time.sleep(backoff)
+                backoff *= 2
+                retries += 1
+            else:
+                return response
+        logger.error("Max retries reached, request failed.")
+        raise CRMError("Max retries reached, request failed.")
+
     def create_or_update_contact(self, email, validated_data):
         is_existing, data = self._retrieve_existing_contact_data(email)
         tickets_data = validated_data.pop('tickets')
@@ -84,9 +102,12 @@ class HubSpotCRMService(CRMStrategyInterface):
         if is_existing:
             contact_id = data['id']
             logger.info(f"Exiting user with {email} exists for update")
-            response = requests.patch(
+            response = self._make_request(
                 self.CONTACT_VERIFY_URL.format(email),
-                headers=self._get_headers(), json={"properties": validated_data})
+                'PATCH',
+                headers=self._get_headers(),
+                json={"properties": validated_data}
+            )
             if response.status_code == 200:
                 deal_ids = self.create_or_update_deal(contact_id, deal_data, deal_pipeline_id)
                 logger.info(f"User with {email} updated successfully")
@@ -106,7 +127,8 @@ class HubSpotCRMService(CRMStrategyInterface):
                     "company": os.environ.get("ORGANIZATION_NAME")
                 }
             }
-            response = requests.post(self.CONTACT_CREATE_URL, headers=self._get_headers(), json=data)
+            response = self._make_request(
+                self.CONTACT_CREATE_URL, "POST", headers=self._get_headers(), json=data)
             if response.status_code == 201:
                 logger.info("Contact created successfully")
                 contact_id = response.json()['id']
@@ -115,24 +137,28 @@ class HubSpotCRMService(CRMStrategyInterface):
                 return response.json()
             raise CRMError("Error during creation of user")
 
-    def _validate_and_create_field_for_deal(self, field_name):
-        data = {
-            "name": field_name,
-            "label": field_name,
-            "type": "string",
-            "fieldType": "text",
-            "groupName": "dealinformation",
-            "formField": False
-        }
-        response = requests.get(
-        "https://api.hubapi.com/crm/v3/properties/deals", headers=self._get_headers(), json=data)
-        if response.status_code == 200:
-            pass
-        response = requests.post(
-        f"{self.HUBSPOT_BASE_URL}/crm/v3/properties/deals", headers=self._get_headers(), json=data)
+    # def _validate_and_create_field_for_deal(self, field_name):
+    #     data = {
+    #         "name": field_name,
+    #         "label": field_name,
+    #         "type": "string",
+    #         "fieldType": "text",
+    #         "groupName": "dealinformation",
+    #         "formField": False
+    #     }
+    #     response = requests.get(
+    #     "https://api.hubapi.com/crm/v3/properties/deals", headers=self._get_headers(), json=data)
+    #     if response.status_code == 200:
+    #         pass
+    #     response = requests.post(
+    #     f"{self.HUBSPOT_BASE_URL}/crm/v3/properties/deals", headers=self._get_headers(), json=data)
 
     def _validate_and_create_field_for_ticket(self, ticket):
-        response = requests.get(self.HUBSPOT_BASE_URL + "/crm/v3/properties/tickets", headers=self._get_headers())
+        response = self._make_request(
+            self.HUBSPOT_BASE_URL + "/crm/v3/properties/tickets",
+            'GET',
+            headers=self._get_headers()
+        )
         if response.status_code == 200:
             ticket_fields = [field['name'] for field in response.json()['results']]
             for ticket_field in ticket:
@@ -145,8 +171,10 @@ class HubSpotCRMService(CRMStrategyInterface):
                         "groupName": "ticketinformation",
                         "options": [],
                     }
-                    response = requests.post(
-                        self.HUBSPOT_BASE_URL + '/crm/v3/properties/tickets', headers=self._get_headers(), json=data)
+                    response = self._make_request(
+                        self.HUBSPOT_BASE_URL + '/crm/v3/properties/tickets', method='POST',
+                        headers=self._get_headers(), json=data
+                    )
                     if response.status_code == 201:
                         logger.info(f"successfully created field {ticket_field} for ticket")
                     else:
@@ -173,7 +201,10 @@ class HubSpotCRMService(CRMStrategyInterface):
         }
 
         url = f"{self.HUBSPOT_BASE_URL}/crm/v3/objects/deals/search"
-        response = requests.post(url, headers=self._get_headers(), json=data)
+        response = self._make_request(
+            url, method='POST',
+            headers=self._get_headers(), json=data
+        )
         existing_deals = {}
         if response.status_code == 200 and response.json():
             for deal in response.json()['results']:
@@ -203,21 +234,26 @@ class HubSpotCRMService(CRMStrategyInterface):
                         },
                     ]
                 }
-                response = requests.post(self.DEAL_CREATE_URL, headers=self._get_headers(), json=deal_payload)
+                response = self._make_request(
+                    self.DEAL_CREATE_URL, method='POST',
+                    headers=self._get_headers(), json=deal_payload
+                )
                 if response.status_code == 201:
                     deal_ids.add(response.json()['id'])
                     logger.info(f"Deal successfully created for customer {contact_id}")
             else:
                 deal_id = existing_deals[deal_data['dealname']]['id']
                 url = f"{self.HUBSPOT_BASE_URL}/crm/v3/objects/deals/{deal_id}"
-                response = requests.patch(
-                    url, headers=self._get_headers(), json={"properties": {
+                response = self._make_request(
+                    url, method='PATCH',
+                    headers=self._get_headers(), json={"properties": {
                         "amount": deal_data.get("amount"),
                         "dealname": deal_data.get("dealname"),
                         "pipeline": deal_pipeline_id,
                         "dealstage": deal_data.get("dealstage"),
                         "contact_id": contact_id
-                    }})
+                    }}
+                )
                 if response.status_code == 200:
                     logger.info(f"deal update for {contact_id} successful")
                     deal_ids.add(deal_id)
@@ -244,7 +280,7 @@ class HubSpotCRMService(CRMStrategyInterface):
                              "associationTypeId": 28}]}
                 )
             self._validate_and_create_field_for_ticket(ticket)
-            response = requests.post(url, headers=self._get_headers(), json=data)
+            response = self._make_request(url, "POST", headers=self._get_headers(), json=data)
             if response.status_code == 201:
                 logger.info("Ticket successfully created")
                 return response.json()
@@ -258,7 +294,7 @@ class HubSpotCRMService(CRMStrategyInterface):
             url += f"&associations={associations}"
         logger.info(f"Fetching {object_type} from {url}")
         try:
-            response = requests.get(url, headers=self._get_headers())
+            response = self._make_request(url, "GET", headers=self._get_headers())
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -266,11 +302,11 @@ class HubSpotCRMService(CRMStrategyInterface):
             raise CRMError(f"Failed to fetch {object_type}")
 
     def get_new_contacts(self, created_after, limit=50, offset=0):
-        return self.fetch_objects(self.CONTACT_CREATE_URL, "contacts", created_after, limit, offset, associations="deals")
+        return self.fetch_objects(
+            self.CONTACT_CREATE_URL, "contacts", created_after, limit, offset, associations="deals")
 
     def get_new_deals(self, created_after, limit=50, offset=0):
-        return self.fetch_objects(self.DEAL_LIST_URL,"deals", created_after, limit, offset)
+        return self.fetch_objects(self.DEAL_LIST_URL, "deals", created_after, limit, offset)
 
     def get_new_tickets(self, created_after, limit=50, offset=0):
         return self.fetch_objects(self.TICKET_LIST_URL, "tickets", created_after, limit, offset)
-

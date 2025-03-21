@@ -18,3 +18,7 @@ class CRMStrategyInterface(ABC):
     @abstractmethod
     def create_support_ticket(self, contact_id, deal_id, properties):
         pass
+
+    @staticmethod
+    def _make_request(self, url, method, max_retries=5, backoff_factor=1, **kwargs):
+        pass

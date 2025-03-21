@@ -1,4 +1,5 @@
-from resources.UserResource import RegisterResource, ListCRMObjects
+from resources.UserResource import RegisterResource
+from resources.CRMResource import ListCRMObjects
 
 
 def initialize_routes(api):

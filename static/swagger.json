@@ -1,0 +1,181 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Insait API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/register": {
+      "post": {
+        "summary": "Register a new contact",
+        "description": "Registers a user with associated deals and tickets.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "User registration payload",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "firstname": {
+                  "type": "string",
+                  "example": "Pascal"
+                },
+                "lastname": {
+                  "type": "string",
+                  "example": "Eze"
+                },
+                "email": {
+                  "type": "string",
+                  "format": "email",
+                  "example": "pascal@example.com"
+                },
+                "phone": {
+                  "type": "string",
+                  "example": "08140795237"
+                },
+                "deals": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "tickets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              },
+              "required": [
+                "firstname",
+                "lastname",
+                "email",
+                "phone",
+                "deals",
+                "tickets"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully registered contact",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "example": "107673773159"
+                    },
+                    "firstname": {
+                      "type": "string",
+                      "example": "Pascal"
+                    },
+                    "lastname": {
+                      "type": "string",
+                      "example": "Eze"
+                    },
+                    "phone": {
+                      "type": "string",
+                      "example": "08140795237"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "example": "2025-03-20T22:59:55.164Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request payload"
+          }
+        }
+      }
+    },
+    "/api/new-crm-objects": {
+      "get": {
+        "summary": "Fetch new CRM objects",
+        "description": "Retrieve newly created contacts, deals, and tickets.",
+        "parameters": [
+          {
+            "name": "created_after",
+            "in": "query",
+            "description": "Filter objects created after a specific timestamp",
+            "required": false,
+            "type": "string",
+            "format": "date-time",
+            "example": "2025-03-20T00:00:00Z"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of records to return",
+            "required": false,
+            "type": "integer",
+            "default": 50,
+            "example": 50
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pagination offset",
+            "required": false,
+            "type": "integer",
+            "default": 0,
+            "example": 0
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved CRM objects",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "contacts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "deals": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "tickets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters"
+          }
+        }
+      }
+    }
+  }
+}
+
