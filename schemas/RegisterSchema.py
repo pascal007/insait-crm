@@ -1,44 +1,58 @@
-from marshmallow import Schema, fields, validates, ValidationError
+from marshmallow import Schema, fields, validates, ValidationError, validate
+import re
 
 
 class DealSchema(Schema):
-    dealname = fields.String(required=True)
+    dealname = fields.String(required=True, validate=validate.Length(min=1, error="Deal name cannot be empty."))
     amount = fields.Float(required=True)
-    dealstage = fields.String(required=True)
+    dealstage = fields.String(required=True, validate=validate.Length(min=1, error="Deal stage cannot be empty."))
+
+    @validates("amount")
+    def validate_amount(self, value):
+        if value < 0:
+            raise ValidationError("Amount must be a positive number.")
+        if round(value, 2) != value:
+            raise ValidationError("Amount must have up to two decimal places.")
 
 
 class TicketSchema(Schema):
-    subject = fields.String(required=True)
-    description = fields.String(required=True)
+    TICKET_SCHEMA_CHOICES = ["general_inquiry", "technical_issue", "billing", "service_request", "meeting"]
+
+    subject = fields.String(required=True, validate=validate.Length(min=1, error="Subject cannot be empty."))
+    description = fields.String(required=True, validate=validate.Length(min=1, error="Description cannot be empty."))
     category = fields.String(
         required=True,
-        validate=lambda x: x in ["general_inquiry", "technical_issue", "billing", "service_request", "meeting"]
+        validate=validate.OneOf(
+            TICKET_SCHEMA_CHOICES,
+            error=f"Invalid category. Must be one of: {', '.join(TICKET_SCHEMA_CHOICES)}"
+        )
     )
-    pipeline = fields.String(required=True)
-    hs_ticket_priority = fields.String(required=True)
-    hs_pipeline_stage = fields.Integer(required=True)
-
-    @validates("hs_pipeline_stage")
-    def validate_pipeline_stage(self, value):
-        if value not in range(1, 5):
-            raise ValidationError("hs_pipeline_stage must be an integer between 1 and 4.")
-
-    @validates("hs_ticket_priority")
-    def validate_ticket_priority(self, value):
-        allowed_values = {"LOW", "MEDIUM", "HIGH", "URGENT"}
-        if value not in allowed_values:
-            raise ValidationError(f"hs_ticket_priority must be one of {allowed_values}.")
+    pipeline = fields.String(required=True, validate=validate.Length(min=1, error="Pipeline cannot be empty."))
+    hs_ticket_priority = fields.String(
+        required=True,
+        validate=validate.OneOf(
+            ["LOW", "MEDIUM", "HIGH", "URGENT"],
+            error="Invalid priority. Must be one of: LOW, MEDIUM, HIGH, URGENT."
+        )
+    )
+    hs_pipeline_stage = fields.Integer(
+        required=True,
+        validate=validate.Range(min=1, max=4, error="hs_pipeline_stage must be an integer between 1 and 4.")
+    )
 
 
 class RegisterSchema(Schema):
-    firstname = fields.String(required=True)
-    lastname = fields.String(required=True)
-    email = fields.Email(required=True)
+    firstname = fields.String(required=True, validate=validate.Length(min=1, error="First name cannot be empty."))
+    lastname = fields.String(required=True, validate=validate.Length(min=1, error="Last name cannot be empty."))
+    email = fields.Email(required=True, error_messages={"invalid": "Invalid email format."})
     phone = fields.String(required=True)
-    deals = fields.List(fields.Nested(DealSchema), required=True, validate=lambda x: len(x) > 0)
-    tickets = fields.List(fields.Nested(TicketSchema), required=True, validate=lambda x: len(x) > 0)
+
+    deals = fields.List(fields.Nested(DealSchema), required=True, validate=validate.Length(
+        min=1, error="At least one deal is required."))
+    tickets = fields.List(fields.Nested(TicketSchema), required=True, validate=validate.Length(
+        min=1, error="At least one ticket is required."))
 
     @validates("phone")
     def validate_phone(self, value):
-        if not value.isdigit() or len(value) not in [10, 11]:
+        if not re.fullmatch(r"\d{10,11}", value):
             raise ValidationError("Invalid phone number format. Must be 10 or 11 digits.")

@@ -1,9 +1,12 @@
+import json
 import os
+import threading
 import time
 
 import requests
 from dotenv import load_dotenv
 
+from config.cache import redis_client
 from exceptions.CRMException import CRMError
 from interface.CRMStrategy import CRMStrategyInterface
 from logger_config import logger
@@ -25,32 +28,58 @@ class HubSpotCRMService(CRMStrategyInterface):
     def __init__(self):
         self.access_token = None
         self.token_expires_at = 0
+        self.lock = threading.Lock()
 
     def _get_access_token(self):
         current_time = time.time()
-        if current_time < self.token_expires_at:
+        if current_time < self.token_expires_at and self.access_token:
             logger.info("Existing access token still valid")
             return self.access_token
-        data = {
-            "grant_type": "refresh_token",
-            "client_id": os.environ.get('HUBSPOT_CLIENT_ID'),
-            "client_secret": os.environ.get('HUBSPOT_CLIENT_SECRET'),
-            "refresh_token": os.environ.get('HUBSPOT_REFRESH_TOKEN')
-        }
-        response = self._make_request(self.HUBSPOT_TOKEN_URL, "POST", data=data)
-        if response.status_code == 200:
-            logger.info("Existing access token invalid, obtaining new access token")
-            response_data = response.json()
-            self.access_token = response_data.get("access_token")
-            self.token_expires_at = time.time() + response_data.get("expires_in")
-            return self.access_token
-        logger.error(f"Error retrieving access token, {response.status_code}")
-        raise CRMError('Error retrieving access token')
+
+        with self.lock:
+            logger.info("running single threaded token refresh")
+            if current_time < self.token_expires_at and self.access_token:
+                return self.access_token
+
+            data = {
+                "grant_type": "refresh_token",
+                "client_id": os.environ.get('HUBSPOT_CLIENT_ID'),
+                "client_secret": os.environ.get('HUBSPOT_CLIENT_SECRET'),
+                "refresh_token": os.environ.get('HUBSPOT_REFRESH_TOKEN')
+            }
+
+            response = self._make_request(self.HUBSPOT_TOKEN_URL, "POST", data=data)
+            if response.status_code == 200:
+                logger.info("Existing access token invalid, obtaining new access token")
+                response_data = response.json()
+
+                new_token = response_data.get("access_token")
+                expires_in = response_data.get("expires_in")
+
+                if not new_token or not expires_in:
+                    logger.error("Invalid token response: Missing access token or expiry")
+                    raise CRMError("Invalid token response")
+
+                self.access_token = new_token
+                self.token_expires_at = time.time() + expires_in
+
+                return self.access_token
+
+            logger.error(f"Error retrieving access token, {response.status_code}")
+            raise CRMError('Error retrieving access token')
 
     def _get_headers(self):
         return {"Authorization": f"Bearer {self._get_access_token()}", "Content-Type": "application/json"}
 
-    def _retrieve_existing_contact_data(self, email):
+    def _retrieve_existing_contact_data(self, email: str):
+        cache_key = f"contact:{email}"
+        logger.info("checking cache for existing contact")
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            logger.info(f"{email} data exists in cache")
+            return True, json.loads(cached_data)
+        else:
+            logger.info(f"{email} data does not exist in cache")
         response = self._make_request(self.CONTACT_VERIFY_URL.format(email), "GET", headers=self._get_headers())
         if response.status_code == 200:
             logger.info(f"Exiting user with {email} exists for update")
@@ -60,7 +89,7 @@ class HubSpotCRMService(CRMStrategyInterface):
         logger.info('Invalid response code response from contact check')
         raise CRMError('Invalid response from provider')
 
-    def _validate_and_clean_deal_data(self, deal_data):
+    def _validate_and_clean_deal_data(self, deal_data: list):
         deal_results = self._make_request(self.DEAL_PIPELINE_URL, "GET", headers=self._get_headers()).json()['results']
         if not deal_results:
             logger.error("deal pipeline stages not configured ")
@@ -77,7 +106,7 @@ class HubSpotCRMService(CRMStrategyInterface):
             deal['dealstage'] = deal_pipeline_stages_data.get(deal['dealstage'])
         return deal_data, deal_pipeline_id
 
-    def _make_request(self, url, method, max_retries=5, backoff_factor=1, **kwargs):
+    def _make_request(self, url: str, method: str, max_retries=5, backoff_factor=1, **kwargs):
         retries = 0
         backoff = backoff_factor
 
@@ -95,7 +124,7 @@ class HubSpotCRMService(CRMStrategyInterface):
         logger.error("Max retries reached, request failed.")
         raise CRMError("Max retries reached, request failed.")
 
-    def create_or_update_contact(self, email, validated_data):
+    def create_or_update_contact(self, email: str, validated_data: dict):
         is_existing, data = self._retrieve_existing_contact_data(email)
         tickets_data = validated_data.pop('tickets')
         deal_data, deal_pipeline_id = self._validate_and_clean_deal_data(validated_data.pop("deals", []))
@@ -112,6 +141,8 @@ class HubSpotCRMService(CRMStrategyInterface):
                 deal_ids = self.create_or_update_deal(contact_id, deal_data, deal_pipeline_id)
                 logger.info(f"User with {email} updated successfully")
                 self.create_support_ticket(contact_id, deal_ids, tickets_data)
+                logger.info("writing updated contact to cache")
+                redis_client.set(f"contact:{email}", json.dumps(response.json()))
                 return response.json()
             else:
                 logger.info(f"{str(response.status_code)}: Error updating user with email {email}."
@@ -134,6 +165,8 @@ class HubSpotCRMService(CRMStrategyInterface):
                 contact_id = response.json()['id']
                 deal_ids = self.create_or_update_deal(contact_id, deal_data, deal_pipeline_id)
                 self.create_support_ticket(contact_id, deal_ids, tickets_data)
+                redis_client.set(f"contact:{email}", json.dumps(response.json()))
+                logger.info("writing newly created contact data to cache")
                 return response.json()
             raise CRMError("Error during creation of user")
 
@@ -153,7 +186,7 @@ class HubSpotCRMService(CRMStrategyInterface):
     #     response = requests.post(
     #     f"{self.HUBSPOT_BASE_URL}/crm/v3/properties/deals", headers=self._get_headers(), json=data)
 
-    def _validate_and_create_field_for_ticket(self, ticket):
+    def _validate_and_create_field_for_ticket(self, ticket: list):
         response = self._make_request(
             self.HUBSPOT_BASE_URL + "/crm/v3/properties/tickets",
             'GET',
@@ -183,7 +216,7 @@ class HubSpotCRMService(CRMStrategyInterface):
             logger.error(f"Error: {response.status_code}, {response.text}")
             raise CRMError('Error updating ticket fields')
 
-    def create_or_update_deal(self, contact_id, deals_data, deal_pipeline_id):
+    def create_or_update_deal(self, contact_id: str, deals_data: list, deal_pipeline_id: str):
         deal_ids = set()
         data = {
             "filterGroups": [
@@ -259,7 +292,7 @@ class HubSpotCRMService(CRMStrategyInterface):
                     deal_ids.add(deal_id)
         return deal_ids
 
-    def create_support_ticket(self, contact_id, deal_ids, ticket_data):
+    def create_support_ticket(self, contact_id: str, deal_ids: set, ticket_data: list):
         for ticket in ticket_data:
             url = f"{self.HUBSPOT_BASE_URL}/crm/v3/objects/tickets"
             data = {
@@ -286,7 +319,7 @@ class HubSpotCRMService(CRMStrategyInterface):
                 return response.json()
             raise CRMError(f'Error creating ticket: {response.status_code}')
 
-    def fetch_objects(self, url, object_type, created_after=None, limit=50, offset=0, associations=None):
+    def fetch_objects(self, url: str, object_type: str, created_after=None, limit=50, offset=0, associations=None):
         url = f"{url}/?limit={limit}&offset={offset}"
         if created_after:
             url += f"&createdAfter={created_after}"
